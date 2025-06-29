@@ -1,20 +1,16 @@
 (ns io.doane.file-collection.data
-  (:require [clojure.java.io :as io]
-            [taoensso.nippy :as nippy])
+  (:require
+    [taoensso.nippy :as nippy])
   (:import (java.io RandomAccessFile)))
-
-(defn create-random-access-file
-  [path sync?]
-  (RandomAccessFile. (io/file path) (str "rw" (when sync? "s"))))
 
 (defn write-data!
   [^RandomAccessFile raf data]
   (let [frozen-bytes  (nippy/freeze data)
         frozen-length (count frozen-bytes)]
     (locking raf
-      ;;; We always write to the end of the file.
+      ;;; We always write to the end of the file unless a value is being dropped.
       (.seek raf (.length raf))
-      ;;; This value has not been dropped from the collection.
+      ;;; This value has not been dropped from the collection. Can mutate.
       (.writeBoolean raf false)
       ;;; This is the size of the data for the next collection item.
       (.writeLong raf frozen-length)
@@ -45,6 +41,12 @@
          :next-offset (.getFilePointer raf)
          :data       data}))))
 
+(defn write-drop!
+  [^RandomAccessFile raf offset]
+  (locking raf
+    (.seek raf offset)
+    (.writeBoolean raf true)))
+
 (defn drop-data!
   ([^RandomAccessFile raf pred]
    (drop-data! raf pred 0))
@@ -52,20 +54,23 @@
    (let [{:keys [data offset next-offset]} (read-data raf offset)]
      (when next-offset
        (when (and (not= ::dropped data) (pred data))
-         (locking raf
-           (.seek raf offset)
-           (.writeBoolean raf true)))
+         (write-drop! raf offset))
        (recur raf pred next-offset)))))
+
+(defn to-raw-collection
+  ([^RandomAccessFile raf]
+   (to-raw-collection raf 0))
+  ([^RandomAccessFile raf offset]
+   (lazy-seq
+     (when-let [{:keys [next-offset data] :as data-map} (read-data raf offset)]
+       (if (= data ::dropped)
+         (to-raw-collection raf next-offset)
+         (cons data-map (to-raw-collection raf next-offset)))))))
 
 (defn to-collection
   ([^RandomAccessFile raf]
-   (to-collection raf 0))
-  ([^RandomAccessFile raf offset]
-   (lazy-seq
-     (when-let [{:keys [next-offset data]} (read-data raf offset)]
-       (if (= data ::dropped)
-         (to-collection raf next-offset)
-         (cons data (to-collection raf next-offset)))))))
+   (->> (to-raw-collection raf)
+        (map :data))))
 
 (defn copy!
   [^RandomAccessFile src-raf ^RandomAccessFile dest-raf]
@@ -80,9 +85,17 @@
 
 (comment
 
+  (require '[io.doane.file-collection.utils :refer [create-random-access-file]])
+
   (def raf (create-random-access-file "/tmp/fc-1" true))
   (def raf2 (create-random-access-file "/tmp/fc-2" true))
   (def raf3 (create-random-access-file "/tmp/fc-3" true))
+
+  (def raf (create-random-access-file "/tmp/fc-111" true))
+
+  (.writeLong raf 12345)
+
+  (.length raf)
 
   (.getFilePointer raf)
 
@@ -95,7 +108,7 @@
 
   (time (clean-copy! raf raf2))
 
-  (time (to-collection raf2))
+  (time (to-collection raf))
 
   (.seek raf 0)
 

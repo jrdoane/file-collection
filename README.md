@@ -8,15 +8,16 @@ Just pull it directly from GitHub for now.
 {:deps {io.github.jrdoane/file-collection {:git/tag "v0.1.0"}}}
 ```
 
-### Code Example
+### Writing Data
 ```clojure
 (require '[io.doane.file-collection.data :as data])
+(require '[io.doane.file-collection.utils :as utils])
 
 ;;; Create a Random Access File via the helper we've created.
 ;;; The first argument is fed to `clojure.java.io/file`.
 ;;; The second argument signals the RAF to write synchronously when true.
-(def raf (data/create-random-access-file "/tmp/my-first-file-collection" true))
-(def raf2 (data/create-random-access-file "/tmp/my-second-file-collection" true))
+(def raf (utils/create-random-access-file "/tmp/my-first-file-collection" true))
+(def raf2 (utils/create-random-access-file "/tmp/my-second-file-collection" true))
 
 ;;; Write some data to the newly created RAF. Data written can be any arbitrary
 ;;; data writable by Nippy.
@@ -40,6 +41,29 @@ Just pull it directly from GitHub for now.
 ;;; If the destination RAF already exists with data, the dest RAF will be
 ;;; concatenated to it.
 (data/copy! raf raf2)
+```
+
+### Indexing Data
+```clojure
+;;; Including the code from above...
+
+(require '[io.doane.file-collection.index :as index])
+
+;;; We need a new random access file for the index we're going to create.
+(def email-raf (utils/create-random-access-file "/tmp/my-first-index" true))
+
+;;; Bring the newly created index up to speed.
+(index/advance-index! raf email-raf :user/email)
+
+;;; Get a lazy collection of everything with an email address.
+(->> (index/to-raw-index-collection email-raf)
+     (index/indexed-collection->data-collection raf))
+
+;;; Use the Index to find a particular item.
+(->> (index/to-raw-index-collection)
+     (filter #(= (:indexed-value %) "jrdoane@gmail.com"))
+     (index/indexed-collection->data-collection raf)
+     (first))
 ```
 
 ### Running Tests
