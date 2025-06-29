@@ -68,13 +68,15 @@ Just pull it directly from GitHub for now.
 
 ### Running Tests
 ```shell
-➜  file-collection git:(master) ✗ clj -X:test
+➜  file-collection git:(master) clj -X:test
 
 Running tests in #{"test"}
 
 Testing io.doane.file-collection.data-test
 
-Ran 1 tests containing 4 assertions.
+Testing io.doane.file-collection.index-test
+
+Ran 2 tests containing 106 assertions.
 0 failures, 0 errors.
 ```
 
