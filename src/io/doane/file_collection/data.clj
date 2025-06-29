@@ -69,8 +69,14 @@
 
 (defn copy!
   [^RandomAccessFile src-raf ^RandomAccessFile dest-raf]
-  (doseq [collection-item (to-collection src-raf)]
-    (write-data! dest-raf collection-item)))
+  (->> (to-collection src-raf)
+       (write-collection! dest-raf)))
+
+(defn copy-when!
+  [^RandomAccessFile src-raf ^RandomAccessFile dest-raf pred-fn]
+  (->> (to-collection src-raf)
+       (filter pred-fn)
+       (write-collection! dest-raf)))
 
 (comment
 

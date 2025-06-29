@@ -42,6 +42,18 @@ Just pull it directly from GitHub for now.
 (data/copy! raf raf2)
 ```
 
+### Running Tests
+```shell
+➜  file-collection git:(master) ✗ clj -X:test
+
+Running tests in #{"test"}
+
+Testing io.doane.file-collection.data-test
+
+Ran 1 tests containing 4 assertions.
+0 failures, 0 errors.
+```
+
 ## License
 Copyright &copy; 2025 [Jonathan Doane][].
 Licensed under [EPL 1.0](license.md).
