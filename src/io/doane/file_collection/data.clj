@@ -8,14 +8,15 @@
   (let [frozen-bytes  (nippy/freeze data)
         frozen-length (count frozen-bytes)]
     (locking raf
-      ;;; We always write to the end of the file unless a value is being dropped.
-      (.seek raf (.length raf))
-      ;;; This value has not been dropped from the collection. Can mutate.
-      (.writeBoolean raf false)
-      ;;; This is the size of the data for the next collection item.
-      (.writeLong raf frozen-length)
-      ;;; Write the frozen nippy content.
-      (.write raf frozen-bytes)))
+      (doto raf
+        ;;; We always write to the end of the file unless a value is being dropped.
+        (.seek (.length raf))
+        ;;; This value has not been dropped from the collection. Can mutate.
+        (.writeBoolean false)
+        ;;; This is the size of the data for the next collection item.
+        (.writeLong frozen-length)
+        ;;; Write the frozen nippy content.
+        (.write frozen-bytes))))
   nil)
 
 (defn write-collection!
@@ -85,30 +86,14 @@
 
 (comment
 
-  (require '[io.doane.file-collection.utils :refer [create-random-access-file]])
+  (require '[io.doane.file-collection.utils :refer [create-random-access-file
+                                                    create-file-data-input-stream]])
 
-  (def raf (create-random-access-file "/tmp/fc-1" true))
-  (def raf2 (create-random-access-file "/tmp/fc-2" true))
-  (def raf3 (create-random-access-file "/tmp/fc-3" true))
+  (def raf (create-random-access-file "/tmp/fc-benchmark/users.fcd" false))
 
-  (def raf (create-random-access-file "/tmp/fc-111" true))
+  (set! *warn-on-reflection* true)
 
-  (.writeLong raf 12345)
-
-  (.length raf)
-
-  (.getFilePointer raf)
-
-  (write-data! raf {:a 1 :b 2 :c 3 :d 4 "e" 5.0})
-  (write-data! raf {:user/email      "jrdoane@gmail.com"
-                    :user/first-name "Jonathan"
-                    :user/last-name  "Doane"})
-
-  (drop-data! raf :a)
-
-  (time (clean-copy! raf raf2))
-
-  (time (to-collection raf))
+  (time (def rval (doall (to-collection raf))))
 
   (.seek raf 0)
 
