@@ -68,7 +68,7 @@ Just pull it directly from GitHub for now.
 
 ### Running Tests
 ```shell
-➜  file-collection git:(master) clj -X:test
+➜  file-collection git:(master) clj -X:test:run-tests
 
 Running tests in #{"test"}
 
