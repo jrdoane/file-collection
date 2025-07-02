@@ -1,14 +1,15 @@
 (ns io.doane.file-collection.data
   (:require
     [taoensso.nippy :as nippy])
-  (:import (java.io DataOutput
-                    DataInput
-                    DataOutputStream
-                    DataInputStream
-                    ByteArrayOutputStream
-                    ByteArrayInputStream
-                    EOFException
-                    RandomAccessFile)))
+  (:import (java.io
+             ByteArrayInputStream
+             ByteArrayOutputStream
+             DataInput
+             DataInputStream
+             DataOutput
+             DataOutputStream
+             EOFException
+             RandomAccessFile)))
 
 (defn write-to-data-output!
   [^DataOutput data-output ^bytes frozen-bytes]
@@ -121,7 +122,7 @@
    (lazy-seq
      (when (not= (.length raf) offset)
        (let [{:keys [collection next-offset]} (read-batch raf offset batch-opts)]
-         (lazy-cat collection (to-raw-collection raf next-offset)))))))
+         (lazy-cat collection (to-raw-collection raf next-offset batch-opts)))))))
 
 (defn to-collection
   ([^RandomAccessFile raf]

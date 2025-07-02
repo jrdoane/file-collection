@@ -2,7 +2,15 @@
   (:require
     [io.doane.file-collection.data :as data]
     [taoensso.nippy :as nippy])
-  (:import (java.io ByteArrayOutputStream DataOutput DataOutputStream RandomAccessFile)))
+  (:import (java.io
+             ByteArrayInputStream
+             ByteArrayOutputStream
+             DataInput
+             DataInputStream
+             DataOutput
+             DataOutputStream
+             EOFException
+             RandomAccessFile)))
 
 (defn next-data-offset
   [^RandomAccessFile index-raf]
@@ -35,7 +43,7 @@
   ([^RandomAccessFile index-raf index-collection]
    (write-index-collection! index-raf index-collection {}))
   ([^RandomAccessFile index-raf index-collection {:keys [batch-size]
-                                                  :or {batch-size 100}}]
+                                                  :or   {batch-size 100}}]
    (when (not-empty index-collection)
      (doseq [index-coll-part (partition-all 100 index-collection)]
        (let [baos (ByteArrayOutputStream.)
@@ -68,28 +76,61 @@
          (map (partial raw-data->indexed-data indexing-fn))
          (write-index-collection! index-raf))))
 
+(defn read-index-from-data-input
+  [^DataInput data-input index-offset]
+  (let [data-offset   (.readLong data-input)
+        frozen-length (.readLong data-input)
+        frozen-bytes  (byte-array frozen-length)
+        indexed-value (do (.readFully data-input frozen-bytes 0 frozen-length)
+                          (nippy/thaw frozen-bytes))]
+    {:index-offset      index-offset
+     :data-offset       data-offset
+     :next-index-offset (+ index-offset 16 frozen-length)
+     :indexed-value     indexed-value}))
+
 (defn read-index
   [^RandomAccessFile index-raf index-offset]
   (locking index-raf
     (.seek index-raf index-offset)
     (when-not (= (.length index-raf) (.getFilePointer index-raf))
-      (let [data-offset   (.readLong index-raf)
-            frozen-length (.readLong index-raf)
-            frozen-bytes  (byte-array frozen-length)
-            indexed-value (do (.read index-raf frozen-bytes)
-                              (nippy/thaw frozen-bytes))]
-        {:index-offset      index-offset
-         :next-index-offset (.getFilePointer index-raf)
-         :data-offset       data-offset
-         :indexed-value     indexed-value}))))
+      (read-index-from-data-input index-raf index-offset))))
+
+(defn read-index-batch
+  ([^RandomAccessFile index-raf index-offset]
+   (read-index-batch index-raf index-offset {}))
+  ([^RandomAccessFile index-raf index-offset {:keys [byte-size]
+                                              :or   {byte-size 262144}}]
+   (let [batch-bytes (byte-array byte-size)
+         _bytes-read (locking index-raf
+                       (.seek index-raf index-offset)
+                       (.read index-raf batch-bytes))
+         bais        (ByteArrayInputStream. batch-bytes)
+         dis         (DataInputStream. bais)]
+     (loop [local-index-offset index-offset
+            index-vec          []]
+       (let [index-packet (try (read-index-from-data-input dis local-index-offset)
+                               (catch EOFException ex
+                                 nil))]
+         (if (or (nil? index-packet)
+                 (= (.length index-raf) (:next-index-offset index-packet)))
+           (if (nil? index-packet)
+             {:collection (seq index-vec)
+              :next-offset local-index-offset}
+             {:collection (seq (conj index-vec index-packet))
+              :next-offset (:next-index-offset index-packet)})
+           (recur (:next-index-offset index-packet)
+                  (conj index-vec index-packet))))))))
 
 (defn to-raw-index-collection
   ([index-raf]
    (to-raw-index-collection index-raf 8))
   ([index-raf index-offset]
+   (to-raw-index-collection index-raf index-offset {}))
+  ([index-raf index-offset batch-opts]
    (lazy-seq
-     (when-let [{:keys [next-index-offset] :as index-data} (read-index index-raf index-offset)]
-       (cons index-data (to-raw-index-collection index-raf next-index-offset))))))
+     (when (not= (.length index-raf) index-offset)
+       (let [{:keys [collection next-offset]} (read-index-batch index-raf index-offset batch-opts)]
+         (lazy-cat collection (to-raw-index-collection index-raf next-offset batch-opts)))))))
 
 (defn resolve-indexed
   [^RandomAccessFile data-raf indexed]
