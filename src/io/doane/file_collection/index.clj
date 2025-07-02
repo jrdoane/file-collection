@@ -2,7 +2,15 @@
   (:require
     [io.doane.file-collection.data :as data]
     [taoensso.nippy :as nippy])
-  (:import (java.io RandomAccessFile)))
+  (:import (java.io ByteArrayOutputStream DataOutput DataOutputStream RandomAccessFile)))
+
+(defn next-data-offset
+  [^RandomAccessFile index-raf]
+  (if (zero? (.length index-raf))
+    0
+    (locking index-raf
+      (.seek index-raf 0)
+      (.readLong index-raf))))
 
 (defn write-index-data-offset!
   [^RandomAccessFile index-raf next-data-offset]
@@ -12,28 +20,53 @@
       (.writeLong next-data-offset)))
   nil)
 
-(defn write-index!
-  [^RandomAccessFile index-raf data-offset next-data-offset indexed-value]
-  (let [frozen-bytes  (nippy/freeze indexed-value)
-        frozen-length (count frozen-bytes)]
-    (locking index-raf
-      ;;; If we've never written to the index before, we need to skip the size
-      ;;; of a Long, which is 64-bits/8-bytes.
-      (when (= (.length index-raf) 0)
-        (.setLength index-raf 8))
-      (let [index-offset (.length index-raf)]
-        ;;; Like data, we already write to the end of the file.
-        (.seek index-raf (.length index-raf))
-        ;;; Write the data offset from the data file.
-        (.writeLong index-raf data-offset)
-        ;;; Write the length of the predicate value's serialized bytes.
-        (.writeLong index-raf frozen-length)
-        ;;; Write the frozen predicate value.
-        (.write index-raf frozen-bytes)
-        ;;; Finally, we go back to the very beginning of the index and update
-        ;;; the location of the next item that could be indexed.
-        (write-index-data-offset! index-raf next-data-offset))))
-  nil)
+(defn write-index-data!
+  [^DataOutput data-output ^long data-offset ^bytes frozen-bytes]
+  (locking data-output
+    (doto data-output
+      ;;; Write the data offset from the data file.
+      (.writeLong data-offset)
+      ;;; Write the length of the predicate value's serialized bytes.
+      (.writeLong (count frozen-bytes))
+      ;;; Write the frozen predicate value.
+      (.write frozen-bytes))))
+
+(defn write-index-collection!
+  ([^RandomAccessFile index-raf index-collection]
+   (write-index-collection! index-raf index-collection {}))
+  ([^RandomAccessFile index-raf index-collection {:keys [batch-size]
+                                                  :or {batch-size 100}}]
+   (when (not-empty index-collection)
+     (doseq [index-coll-part (partition-all 100 index-collection)]
+       (let [baos (ByteArrayOutputStream.)
+             dos  (DataOutputStream. baos)]
+         (doseq [{:keys [data-offset indexed-value]} index-coll-part]
+           (when indexed-value
+             (let [frozen-bytes (nippy/freeze indexed-value)]
+               (write-index-data! dos data-offset frozen-bytes))))
+         (let [next-offset   (reduce max 0 (map :next-data-offset index-coll-part))
+               all-the-bytes (.toByteArray baos)]
+           (locking index-raf
+             (.seek index-raf (.length index-raf))
+             (.write index-raf all-the-bytes)
+             (write-index-data-offset! index-raf next-offset))))))))
+
+(defn raw-data->indexed-data
+  [indexing-fn raw-data]
+  {:data-offset      (:offset raw-data)
+   :next-data-offset (:next-offset raw-data)
+   :indexed-value    (when (not= ::data/dropped (:data raw-data))
+                       (indexing-fn (:data raw-data)))})
+
+(defn advance-index!
+  [^RandomAccessFile data-raf ^RandomAccessFile index-raf indexing-fn]
+  (let [starting-data-offset (next-data-offset index-raf)
+        raw-data-collection  (data/to-raw-collection data-raf starting-data-offset)]
+    (when (zero? (.length index-raf))
+      (.setLength index-raf 8))
+    (->> raw-data-collection
+         (map (partial raw-data->indexed-data indexing-fn))
+         (write-index-collection! index-raf))))
 
 (defn read-index
   [^RandomAccessFile index-raf index-offset]
@@ -68,34 +101,20 @@
        (map (partial resolve-indexed data-raf))
        (remove #(= % ::data/dropped))))
 
-(defn next-data-offset
-  [^RandomAccessFile index-raf]
-  (if (zero? (.length index-raf))
-    0
-    (locking index-raf
-      (.seek index-raf 0)
-      (.readLong index-raf))))
-
-(defn advance-index!
-  [^RandomAccessFile data-raf ^RandomAccessFile index-raf indexing-fn]
-  (let [starting-data-offset (next-data-offset index-raf)
-        raw-data-collection  (data/to-raw-collection data-raf starting-data-offset)]
-    (doseq [{:keys [offset next-offset data]} raw-data-collection]
-      (let [indexed-value (indexing-fn data)]
-        (if indexed-value
-          (write-index! index-raf offset next-offset indexed-value)
-          (write-index-data-offset! index-raf next-offset))))))
-
 (comment
 
   (require '[io.doane.file-collection.utils :refer [create-random-access-file]])
 
-  (def data-raf (create-random-access-file "/tmp/fc-1" true))
-  (def index-raf (create-random-access-file "/tmp/fc-1.index3.fci" true))
+  (def data-raf (create-random-access-file "/tmp/fc-benchmark/users.fcd" false))
+  (def index-raf (create-random-access-file "/tmp/fc-1.index5.fci" false))
+  (.setLength index-raf 0)
 
   (next-data-offset index-raf)
 
-  (advance-index! data-raf index-raf :user/email)
+  (time (advance-index! data-raf index-raf :user/email))
+
+  (time (def rval (doall (to-raw-index-collection index-raf))))
+  (count rval)
 
   (->> (to-raw-index-collection index-raf)
        (indexed-collection->data-collection data-raf))
