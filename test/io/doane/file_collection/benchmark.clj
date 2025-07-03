@@ -45,7 +45,7 @@
        (doall)))
 
 (defn run-benchmark!
-  [data-path file-sync?]
+  [{:keys [data-path file-sync?]}]
   (.mkdirs (io/file data-path))
   (let [user-raf        (create-random-access-file (str data-path "/users.fcd") file-sync?)
         smith-index-raf (create-random-access-file (str data-path "/users.smith-index.fci") file-sync?)
@@ -84,6 +84,7 @@
 
   (c/quick-benchmark (+ 1 2 3 4 5) {})
 
-  (run-benchmark! "/tmp/fc-benchmark" false)
+  (run-benchmark! {:data-path "/tmp/fc-benchmark"
+                   :file-sync? false})
 
   )

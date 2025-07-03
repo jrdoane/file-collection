@@ -12,6 +12,13 @@
              RandomAccessFile)))
 
 (defn write-to-data-output!
+  "Given an instance of a `java.io.DataOutput` object and a byte array of Nippy
+  frozen bytes. Write a boolean to indicate if the item has been dropped, a long
+  that represents the size of the frozen bytes, then all the frozen bytes.
+
+  Grab monitor lock on `data-output` before writing so it should be thread safe.
+
+  Returns the number of bytes written."
   [^DataOutput data-output ^bytes frozen-bytes]
   (let [frozen-length (count frozen-bytes)]
     (locking data-output
@@ -21,9 +28,15 @@
         ;;; This is the size of the data for the next collection item.
         (.writeLong frozen-length)
         ;;; Write the frozen nippy content.
-        (.write frozen-bytes)))))
+        (.write frozen-bytes)))
+    (+ 9 frozen-length)))
 
 (defn write-data!
+  "Given an instance of a `java.io.RandomAccessFile` and arbitrary Clojure data,
+  freeze the data with Nippy, seek to the end of the RAF, and write the singular
+  frozen data entity via `write-to-data-output!`.
+
+  Returns nil."
   [^RandomAccessFile raf data]
   (let [frozen-bytes (nippy/freeze data)]
     (locking raf
@@ -33,6 +46,13 @@
   nil)
 
 (defn write-collection!
+  "Given an instance of a `java.io.RandomAccessFile` and a collection of arbitrary
+  Clojure data, and an optional batch options map. Writes all of the provided collection
+  to the RAF like `write-data!` except does it in batches into memory, then writes
+  those batches to disk via the RAF.
+
+  The batch options map can take a single argument:
+  :batch-size which defaults to 100."
   ([^RandomAccessFile raf data-collection]
    (write-collection! raf data-collection {}))
   ([^RandomAccessFile raf data-collection {:keys [batch-size] :as _opts
@@ -49,6 +69,18 @@
            (.write raf all-the-bytes)))))))
 
 (defn read-from-data-input
+  "Given an instance of a `java.io.DataInput` and a data offset at which the data
+  resides, reads 9 bytes for the dropped flag and length of the frozen data, followed
+  by the length of the frozen data if the data hasn't been dropped. This is read
+  out into a map with the attributes:
+  `:offset` which is where the data packet starts.
+  `:next-offset` where the next data is or will be if it's the end of the input.
+  `:data` which is the unfrozen data from the on disk collection.
+          The above may also be `:io.doane.file-collection.data/dropped` in which
+          case we bypassed reading the data because it was marked as dropped.
+
+  This function may throw IOException if something goes terribly wrong or EOFException
+  if we've run out of data and expected more."
   [^DataInput data-input offset]
   (let [dropped?      (.readBoolean data-input)
         frozen-length (.readLong data-input)]
@@ -63,6 +95,9 @@
                       (nippy/thaw frozen-bytes)))}))
 
 (defn read-data
+  "Given an instance of a `java.io.RandomAccessFile` read a single collection value
+  from the RAF at the provided offset value. This function is thread-safe. Returns
+  the output of `read-from-data-input` or `nil` if we're at the end of the file."
   [^RandomAccessFile raf offset]
   (locking raf
     (.seek raf offset)
@@ -70,6 +105,12 @@
       (read-from-data-input raf offset))))
 
 (defn read-batch
+  "Given an instance of a `java.io.RandomAccessFile`, a data offset where we should
+  start reading, and an optional batch options map. Returns a map of two attributes:
+  `:collection` which is the slice of the collection we just read in a batch. These
+                values are output from `read-from-data-input`.
+  `:next-offset` which is the location to start reading from for the next item in
+                 the collection if it exists yet. May point to the end of the file."
   ([^RandomAccessFile raf offset]
    (read-batch raf offset {}))
   ([^RandomAccessFile raf offset {:keys [byte-size]
@@ -98,22 +139,22 @@
                     (conj data-vec data-packet)))))))))
 
 (defn write-drop!
+  "Given an instance of `java.io.RandomAccessFile` and an offset for data in that file,
+  write a single byte (boolean value) to mark the data at that offset as dropped.
+
+  Returns nil."
   [^RandomAccessFile raf offset]
   (locking raf
     (.seek raf offset)
     (.writeBoolean raf true)))
 
-(defn drop-data!
-  ([^RandomAccessFile raf pred]
-   (drop-data! raf pred 0))
-  ([^RandomAccessFile raf pred offset]
-   (let [{:keys [data offset next-offset]} (read-data raf offset)]
-     (when next-offset
-       (when (and (not= ::dropped data) (pred data))
-         (write-drop! raf offset))
-       (recur raf pred next-offset)))))
-
 (defn to-raw-collection
+  "Given an instance of a `java.io.RandomAccessFile` and optional offset and
+  batch options map. Return a lazy sequence of raw values from the collection on
+  disk with dropped items omitted. Data is read in batches and the size of those
+  batches are controlled by the `:byte-size` attribute on the batch options map.
+  This value may need to be increased for collections with very large items in.
+  The default value is 256KB. The default offset is 0, the beginning of the file."
   ([^RandomAccessFile raf]
    (to-raw-collection raf 0))
   ([^RandomAccessFile raf offset]
@@ -124,17 +165,35 @@
        (let [{:keys [collection next-offset]} (read-batch raf offset batch-opts)]
          (lazy-cat collection (to-raw-collection raf next-offset batch-opts)))))))
 
+(defn drop-data!
+  "Given an instance of `java.io.RandomAccessFile` and a predicate function, lazily
+  read the RAF via `to-raw-collection` and check every element for a truthy return
+  value from the predicate function. Then write the 'drop byte/boolean' for each
+  of those items.
+
+  Returns nil"
+  [^RandomAccessFile raf predicate-fn]
+  (let [entities-to-drop (filter #(predicate-fn (:data %)) (to-raw-collection raf))]
+    (doseq [{:keys [offset]} entities-to-drop]
+      (write-drop! raf offset))))
+
 (defn to-collection
+  "Like `to-raw-collection` except mapped over the stored value. Should match the
+  collection data initially written to disk."
   ([^RandomAccessFile raf]
    (->> (to-raw-collection raf)
         (map :data))))
 
 (defn copy!
+  "Given a source and destination `java.io.RandomAccessFile`, pull a lazy collection
+  from the source and write to the destination with all those values."
   [^RandomAccessFile src-raf ^RandomAccessFile dest-raf]
   (->> (to-collection src-raf)
        (write-collection! dest-raf)))
 
 (defn copy-when!
+  "Like `copy!` except it takes a predicate function and only copies values for
+  which the predicate function returns true."
   [^RandomAccessFile src-raf ^RandomAccessFile dest-raf pred-fn]
   (->> (to-collection src-raf)
        (filter pred-fn)
