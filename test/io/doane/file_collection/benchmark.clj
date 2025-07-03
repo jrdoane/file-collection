@@ -65,7 +65,7 @@
     (println "Filtering all of the 'Smith' last name users from the RAF.")
     (c/bench (filter-on-smith-predicate user-raf))
 
-    (println "Create an index from with 'Smith' predicate.")
+    (println "Create an index from the 'Smith' predicate.")
     (c/bench (create-smith-index-and-clear! user-raf smith-index-raf))
 
     (index/advance-index! user-raf smith-index-raf fake-database/smith-predicate)

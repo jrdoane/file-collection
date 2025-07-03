@@ -5,7 +5,7 @@ This is a Clojure library for writing arbitrary data to disk and returning it la
 ### Deps
 Just pull it directly from GitHub for now.
 ```clojure
-{:deps {io.github.jrdoane/file-collection {:git/tag "v0.1.1"}}}
+{:deps {io.github.jrdoane/file-collection {:git/tag "v0.1.2"}}}
 ```
 
 ### Writing Data
