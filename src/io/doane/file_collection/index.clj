@@ -13,6 +13,10 @@
              RandomAccessFile)))
 
 (defn next-data-offset
+  "Given an instance of `java.io.RandomAccessFile`, either return the long value
+  contained in the first 8 bytes of the RAF or zero if the file is empty. This
+  value represents the last data location that was indexed. This function is
+  thread-safe."
   [^RandomAccessFile index-raf]
   (if (zero? (.length index-raf))
     0
@@ -21,6 +25,10 @@
       (.readLong index-raf))))
 
 (defn write-index-data-offset!
+  "Given an instance of `java.io.RandomAccessFile`, and a long value for the next
+  data offset to be processed (which may be the EOF of the data file,) write that
+  next data offset to the first 8 bytes of the index RAF. This function is
+  thread-safe."
   [^RandomAccessFile index-raf next-data-offset]
   (locking index-raf
     (doto index-raf
@@ -29,6 +37,10 @@
   nil)
 
 (defn write-index-data!
+  "Given an instance of a `java.io.DataOutput`, a long data offset, and a byte
+  array of frozen Nippy bytes, write the data offset, length of the frozen bytes,
+  and the frozen bytes, in that order, to the DataOutput object. This function is
+  thread-safe."
   [^DataOutput data-output ^long data-offset ^bytes frozen-bytes]
   (locking data-output
     (doto data-output
@@ -40,12 +52,16 @@
       (.write frozen-bytes))))
 
 (defn write-index-collection!
+  "Given an instance of a `java.io.RandomAccessFile`, and index collection, and
+  an optional batch options map, write all the items in the `index-collection` to
+  disk in batches dictated by the `:batch-size` attribute of the batch options
+  map. This function is thead-safe."
   ([^RandomAccessFile index-raf index-collection]
    (write-index-collection! index-raf index-collection {}))
   ([^RandomAccessFile index-raf index-collection {:keys [batch-size]
                                                   :or   {batch-size 100}}]
    (when (not-empty index-collection)
-     (doseq [index-coll-part (partition-all 100 index-collection)]
+     (doseq [index-coll-part (partition-all batch-size index-collection)]
        (let [baos (ByteArrayOutputStream.)
              dos  (DataOutputStream. baos)]
          (doseq [{:keys [data-offset indexed-value]} index-coll-part]
@@ -60,6 +76,10 @@
              (write-index-data-offset! index-raf next-offset))))))))
 
 (defn raw-data->indexed-data
+  "Given an indexing function and raw data from `to-raw-collection` in the data
+  namespace, create data related to indexing which includes the data offset,
+  next data offset, and value of applying the indexing function to the stored
+  data."
   [indexing-fn raw-data]
   {:data-offset      (:offset raw-data)
    :next-data-offset (:next-offset raw-data)
@@ -67,11 +87,14 @@
                        (indexing-fn (:data raw-data)))})
 
 (defn advance-index!
+  "Given two instances of `java.io.RandomAccessFile`, the `data-raf`, the
+  `index-raf`, and an indexing function. Bring the `index-raf` up to speed with
+  the current state of the `data-raf`."
   [^RandomAccessFile data-raf ^RandomAccessFile index-raf indexing-fn]
   (let [starting-data-offset (next-data-offset index-raf)
         raw-data-collection  (data/to-raw-collection data-raf starting-data-offset)]
     (when (zero? (.length index-raf))
-      (.setLength index-raf 8))
+      (write-index-data-offset! index-raf 0))
     (->> raw-data-collection
          (map (partial raw-data->indexed-data indexing-fn))
          (write-index-collection! index-raf))))
